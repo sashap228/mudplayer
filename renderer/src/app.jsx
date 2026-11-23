@@ -343,6 +343,7 @@ const ORB_FS = `
 precision highp float;
 uniform vec2 uRes; uniform float uTime; uniform float uEn; uniform vec4 uLv;
 uniform vec3 uC1; uniform vec3 uC2; uniform vec3 uC3; uniform float uScale;
+uniform vec3 uPullDir; uniform float uPullAmt; uniform vec2 uOff;
 vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
 vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;}
 vec4 permute(vec4 x){return mod289(((x*34.)+1.)*x);}
@@ -373,25 +374,32 @@ float map(vec3 p){
   float n=snoise(q*.78+vec3(0.,uTime*.2,uTime*.14))*amp;
   n+=snoise(q*1.55-vec3(uTime*.24,0.,uTime*.17))*amp*(.28+uLv.y*.25);
   float r=.92+.02*sin(uTime*1.2)+uEn*.05;
-  return (length(p)-r-n)*.62;
+  // оттягивание мышью: выпуклость в сторону курсора (при отдаче пружины — вмятина)
+  float k=max(dot(normalize(p),uPullDir),0.);
+  float bulge=uPullAmt*pow(k,4.)+uPullAmt*.12*k;
+  return (length(p)-r-n-bulge)*(.62/(1.+abs(uPullAmt)*1.3));
 }
 vec3 nrm(vec3 p){vec2 e=vec2(.0025,0.);return normalize(vec3(map(p+e.xyy)-map(p-e.xyy),map(p+e.yxy)-map(p-e.yxy),map(p+e.yyx)-map(p-e.yyx)));}
 void main(){
   vec2 uv=(gl_FragCoord.xy-.5*uRes)/uRes.y/uScale;
-  uv.y-=sin(uTime*.7)*.035; uv.x-=sin(uTime*.45)*.02;
+  uv.y-=sin(uTime*.7)*.035; uv.x-=sin(uTime*.45)*.02; uv-=uOff;
+  // мягкое затухание к краям холста — никаких видимых прямоугольников
+  vec2 sq=gl_FragCoord.xy/uRes;
+  float edge=smoothstep(0.,.2,sq.x)*smoothstep(0.,.2,1.-sq.x)*smoothstep(0.,.22,sq.y)*smoothstep(0.,.22,1.-sq.y);
   vec3 ro=vec3(0.,0.,4.6); vec3 rd=normalize(vec3(uv,-1.6));
   // ограничивающая сфера: лучи мимо капли не считаем
-  float b=dot(ro,rd); float c=dot(ro,ro)-1.62*1.62; float disc=b*b-c;
+  float bound=1.62+max(uPullAmt,0.)*1.1;
+  float b=dot(ro,rd); float c=dot(ro,ro)-bound*bound; float disc=b*b-c;
   vec3 col=vec3(0.); float alpha=0.;
   float rr=length(uv);
-  float halo=exp(-pow(max(rr-.3,0.)*4.2,1.6))*(.32+uEn*.55);
+  float halo=exp(-pow(max(rr-.28,0.)*5.,1.6))*(.3+uEn*.5)*edge;
   if(disc>0.){
     float t=max(-b-sqrt(disc),0.); float dmin=9.; float tmin=t; bool hit=false;
-    for(int i=0;i<64;i++){
+    for(int i=0;i<80;i++){
       vec3 p=ro+rd*t; float d=map(p);
       if(d<dmin){dmin=d;tmin=t;}
       if(d<.001){hit=true;break;}
-      t+=d; if(t>8.)break;
+      t+=d; if(t>9.)break;
     }
     float cov=hit?1.:1.-smoothstep(0.,.012,dmin);
     if(cov>0.){
@@ -408,6 +416,7 @@ void main(){
       c2+=spec*vec3(1.)*.95+spec2*uC3*.45;
       c2+=fres*uC3*.85+pow(fres,5.)*vec3(1.)*.35;
       c2=pow(c2,vec3(.92));
+      cov*=smoothstep(0.,.06,edge+.02);
       col=c2*cov; alpha=cov;
     }
   }
@@ -416,7 +425,7 @@ void main(){
 }`;
 const hsl2rgb = (h, s, l) => { s /= 100; l /= 100; const k = (n) => (n + h / 30) % 12; const a = s * Math.min(l, 1 - l); const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return [f(0), f(8), f(4)]; };
 function WaveViz(props) {
-  const { pal, playing, height = 420, size = .62 } = props;
+  const { pal, playing, height = 420, size = .62, interactive = false } = props;
   const ref = useRef(null);
   const [gl2d, setGl2d] = useState(false);
   const palRef = useRef(pal); palRef.current = pal;
@@ -433,7 +442,19 @@ function WaveViz(props) {
     const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const loc = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    const U = Object.fromEntries(['uRes', 'uTime', 'uEn', 'uLv', 'uC1', 'uC2', 'uC3', 'uScale'].map((n) => [n, gl.getUniformLocation(prog, n)]));
+    const U = Object.fromEntries(['uRes', 'uTime', 'uEn', 'uLv', 'uC1', 'uC2', 'uC3', 'uScale', 'uPullDir', 'uPullAmt', 'uOff'].map((n) => [n, gl.getUniformLocation(prog, n)]));
+    // ── взаимодействие: тянуть, отпускать (пружина), «тык» ──
+    const P = { drag: false, hover: false, m: [0, 0], amt: 0, vel: 0, dir: [0, 0, 1], tdir: [0, 0, 1], off: [0, 0], offV: [0, 0], down: 0, downM: [0, 0] };
+    const toUv = (e) => { const r = c.getBoundingClientRect(); const sc = size / .62; return [((e.clientX - r.left) - r.width / 2) / r.height / sc, ((r.bottom - e.clientY) - r.height / 2) / r.height / sc]; };
+    const onDown = (e) => { if (!interactive) return; P.drag = true; P.m = toUv(e); P.down = performance.now(); P.downM = P.m; c.setPointerCapture(e.pointerId); c.classList.add('grab'); };
+    const onMove = (e) => { P.m = toUv(e); P.hover = true; };
+    const onUp = (e) => {
+      if (!P.drag) return; P.drag = false; c.classList.remove('grab');
+      const moved = Math.hypot(P.m[0] - P.downM[0], P.m[1] - P.downM[1]);
+      if (performance.now() - P.down < 250 && moved < .03) { P.vel += 5.5; P.tdir = [P.m[0] * 1.5, P.m[1] * 1.5, .9]; } // «тык» — шар вздрагивает
+    };
+    const onLeave = () => { P.hover = false; };
+    c.addEventListener('pointerdown', onDown); c.addEventListener('pointermove', onMove); c.addEventListener('pointerup', onUp); c.addEventListener('pointercancel', onUp); c.addEventListener('pointerleave', onLeave);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     let raf, t = Math.random() * 100, last = performance.now(), lv = [0, 0, 0, 0, 0], en = 0, visible = true;
     let col = null;
@@ -458,13 +479,35 @@ function WaveViz(props) {
       gl.uniform2f(U.uRes, c.width, c.height); gl.uniform1f(U.uTime, t); gl.uniform1f(U.uEn, en);
       gl.uniform4f(U.uLv, lv[0], lv[1], lv[2], lv[3]); gl.uniform1f(U.uScale, size / .62);
       gl.uniform3fv(U.uC1, col[0]); gl.uniform3fv(U.uC2, col[1]); gl.uniform3fv(U.uC3, col[2]);
+      // физика оттягивания
+      const len = Math.hypot(P.m[0], P.m[1]);
+      let pullT = 0;
+      if (P.drag) { pullT = clamp((len - .12) * 1.7, 0, .78); P.tdir = [P.m[0] * 2.2, P.m[1] * 2.2, .55]; }
+      else if (P.hover && interactive && len < .7) { pullT = .07; P.tdir = [P.m[0] * 2, P.m[1] * 2, .8]; }
+      const K = P.drag ? 140 : 55, C = P.drag ? 20 : 4.2;
+      P.vel += (-K * (P.amt - pullT) - C * P.vel) * dt; P.amt += P.vel * dt;
+      P.amt = clamp(P.amt, -.45, .85);
+      const nd = Math.hypot(...P.tdir) || 1; const td = P.tdir.map((v) => v / nd);
+      P.dir = P.dir.map((v, i) => v + (td[i] - v) * Math.min(1, dt * (P.drag ? 14 : 6)));
+      const dl = Math.hypot(...P.dir) || 1;
+      // сам шар слегка тянется за курсором
+      const toff = P.drag ? [P.m[0] * .12, P.m[1] * .12] : [0, 0];
+      P.offV = P.offV.map((v, i) => v + (-40 * (P.off[i] - toff[i]) - 6 * v) * dt);
+      P.off = P.off.map((v, i) => v + P.offV[i] * dt);
+      gl.uniform3f(U.uPullDir, P.dir[0] / dl, P.dir[1] / dl, P.dir[2] / dl); gl.uniform1f(U.uPullAmt, P.amt);
+      gl.uniform2f(U.uOff, P.off[0], P.off[1]);
+      gl.uniform1f(U.uEn, en + Math.min(.25, Math.abs(P.vel) * .03));
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     };
     raf = requestAnimationFrame(loop);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); gl.getExtension('WEBGL_lose_context')?.loseContext(); };
-  }, [size]);
+    return () => {
+      cancelAnimationFrame(raf); ro.disconnect(); io.disconnect();
+      c.removeEventListener('pointerdown', onDown); c.removeEventListener('pointermove', onMove); c.removeEventListener('pointerup', onUp); c.removeEventListener('pointercancel', onUp); c.removeEventListener('pointerleave', onLeave);
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    };
+  }, [size, interactive]);
   if (gl2d) return <WaveViz2D {...props} />;
-  return <div className="wviz orb3d" style={{ height }}><canvas ref={ref} /></div>;
+  return <div className={`wviz orb3d ${interactive ? 'interactive' : ''}`} style={{ height }}><canvas ref={ref} /></div>;
 }
 
 const CHARACTERS = [['любимое', 'Любимое', 'Похожее на то, что ты слушаешь'], ['незнакомое', 'Незнакомое', 'Новые артисты'], ['популярное', 'Популярное', 'Чарты и хиты']];
@@ -487,7 +530,8 @@ function WavePage({ P }) {
   return (
     <div className="page wave-page">
       <div className="wstage">
-        <WaveViz pal={pal} playing={playing && waveMode} height={360} size={.66} />
+        <WaveViz pal={pal} playing={playing && waveMode} height={400} size={.6} interactive />
+        <div className="whint">потяни шар</div>
         <div className="wcenter">
           <div className="label" style={{ color: 'rgba(255,255,255,.55)' }}>Моя волна</div>
           {on ? <>
@@ -545,7 +589,7 @@ function Home({ P }) {
       <div className="h1" style={{ marginTop: 6, marginBottom: 22 }}>Что включим?</div>
 
       <div className="hero">
-        <div className="hero-viz"><WaveViz pal={P.pal} playing={P.playing && P.waveMode} height={260} size={.7} /></div>
+        <div className="hero-viz"><WaveViz pal={P.pal} playing={P.playing && P.waveMode} height={300} size={.5} /></div>
         <div className="hero-top">
           <div>
             <h2>Моя волна</h2>
