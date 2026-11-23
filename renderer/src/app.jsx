@@ -7,10 +7,11 @@ const api = window.api;
 const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
 const SRC = { sc: 'SoundCloud', yt: 'YouTube Music', au: 'Audius' };
-const SRC_ALL = { ...SRC, sp: 'Spotify' };
-const SRC_SHORT = { yt: 'YTM', sc: 'SC', au: 'AUD', sp: 'SPOT' };
+const SRC_ALL = { ...SRC, sp: 'Spotify', ym: 'Яндекс Музыка' };
+const isExt = (t) => t && (t.src === 'sp' || t.src === 'ym');
+const SRC_SHORT = { yt: 'YTM', sc: 'SC', au: 'AUD', sp: 'SPOT', ym: 'ЯМ' };
 const GENRES = ['рэп', 'поп', 'электроника', 'инди', 'рок', 'фонк', 'lo-fi', 'r&b', 'хаус', 'альтернатива', 'джаз', 'гиперпоп'];
-const tkey = (t) => t && (t.src === 'sp' ? t.id : t.src + ':' + (t.vid || t.scid || t.url || t.aid));
+const tkey = (t) => t && (isExt(t) ? t.id : t.src + ':' + (t.vid || t.scid || t.url || t.aid));
 const errMsg = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 const ls = {
   get: (k, d) => { try { const v = localStorage.getItem('mp:' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
@@ -618,7 +619,7 @@ function Home({ P }) {
       </>}
       {!P.playlists.length && <div className="hero" style={{ marginTop: 16, padding: '16px 20px', background: '#121214' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
-          <div><div style={{ fontWeight: 600 }}>Перенеси свою музыку</div><div className="sub">Лайки и плейлисты из SoundCloud и Spotify — в один клик.</div></div>
+          <div><div style={{ fontWeight: 600 }}>Перенеси свою музыку</div><div className="sub">Лайки и плейлисты из Яндекс Музыки, SoundCloud и Spotify — по ссылке.</div></div>
           <button className="btn pri" onClick={() => P.go('library')}>Импортировать</button>
         </div>
       </div>}
@@ -762,13 +763,14 @@ function ImportBox({ P }) {
       <div className="label">Импорт</div>
       <div className="imp-row">
         <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && url && importUrl(url).then((ok) => ok && setUrl(''))}
-          placeholder="Ссылка: плейлист/альбом Spotify, профиль или плейлист SoundCloud" />
+          placeholder="Ссылка: Яндекс Музыка, Spotify или SoundCloud" />
         <button className="btn pri" disabled={!url || importing} onClick={() => importUrl(url).then((ok) => ok && setUrl(''))}>{importing ? <span className="spin" /> : 'Импорт'}</button>
         <button className="btn sec" disabled={importing} onClick={() => file.current.click()}>CSV</button>
         <input ref={file} type="file" accept=".csv,text/csv" multiple hidden onChange={async (e) => { for (const f of e.target.files) await importCsv(f.name, await f.text()); e.target.value = ''; }} />
       </div>
       <div className="imp-hint">
-        SoundCloud: ссылка на профиль подтянет все лайки и плейлисты. Spotify: публичный плейлист или альбом по ссылке (до 100 треков).
+        <b>Яндекс Музыка:</b> ссылка на плейлист, «Мне нравится» (music.yandex.ru/users/<i>логин</i>/playlists/3), альбом или артиста — нужен включённый «Публичный доступ к фонотеке».
+        <br /><b>SoundCloud:</b> ссылка на профиль подтянет все лайки и плейлисты. <b>Spotify:</b> публичный плейлист или альбом (до 100 треков).
         Весь Spotify, включая «Любимые треки»: выгрузи на <span className="mono">exportify.net</span> и перетащи CSV сюда.
       </div>
     </div>
@@ -842,7 +844,7 @@ function Playlist({ P, plId }) {
         <div>
           <div className="label">Плейлист · {SRC_ALL[pl.source] || 'импорт'}</div>
           <h1 style={{ marginTop: 8, fontSize: 44, textTransform: 'none' }}>{pl.name}</h1>
-          <div className="sub">{pl.tracks.length} треков · {Math.round(total / 60)} мин{pl.source === 'sp' ? ' · играет через полные версии с SoundCloud / YouTube Music' : ''}</div>
+          <div className="sub">{pl.tracks.length} треков · {Math.round(total / 60)} мин{pl.source === 'sp' || pl.source === 'ym' ? ' · играет через полные версии с SoundCloud / YouTube Music' : ''}</div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
             <button className="btn pri" onClick={() => playList(pl.tracks, 0)}>{I.play} Слушать</button>
             <button className="btn sec" onClick={() => playList([...pl.tracks].sort(() => Math.random() - .5), 0)}>{I.shuffle} Перемешать</button>
@@ -1019,7 +1021,7 @@ function App() {
     setHistory((h) => [t, ...h.filter((x) => tkey(x) !== k)].slice(0, 200));
     if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: SRC_ALL[t.src], artwork: t.cover ? [{ src: t.cover, sizes: '512x512' }] : [] });
     let playable = t;
-    if (t.src === 'sp') { // трек из Spotify/CSV → подбираем полную версию
+    if (isExt(t)) { // трек из Spotify/Яндекса/CSV → подбираем полную версию
       try { playable = await api.invoke('match', t); } catch { playable = null; }
       if (tkey(st.current.cur) !== k) return;
       if (!playable) {

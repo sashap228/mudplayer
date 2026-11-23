@@ -39,6 +39,8 @@ const store = (() => {
 })();
 const sc = require('./soundcloud')({ log: (...a) => log(...a), store });
 const { importSpotify, importCsv } = require('./spotify');
+const { importYandex } = require('./yandex');
+const isExt = (t) => t && (t.src === 'sp' || t.src === 'ym'); // треки из Spotify/Яндекса играют через подобранную полную версию
 const send = (ch, ...a) => { if (main && !main.isDestroyed()) main.webContents.send(ch, ...a); };
 
 /* ───────────── yt-dlp ───────────── */
@@ -576,12 +578,12 @@ async function ensureCached(t) {
     }
   }
   if (t.src === 'au') return cacheProgressive('au' + t.aid, `${await audiusHost()}/v1/tracks/${t.aid}/stream?app_name=${APP_NAME}`, 'audio/mpeg');
-  if (t.src === 'sp') { const m = await matchTrack(t); if (!m) throw new Error('не найдена полная версия'); return ensureCached(m); }
+  if (isExt(t)) { const m = await matchTrack(t); if (!m) throw new Error('не найдена полная версия'); return ensureCached(m); }
   throw new Error('unknown source');
 }
 
 /* ───────────── загрузки (офлайн) ───────────── */
-const dkey = (t) => (t.src === 'sp' ? t.id : t.src + ':' + (t.vid || t.scid || t.url || t.aid));
+const dkey = (t) => (isExt(t) ? t.id : t.src + ':' + (t.vid || t.scid || t.url || t.aid));
 const dlQueue = []; let dlActive = 0;
 function queueDownloads(tracks) {
   const have = store.get('downloads', {});
@@ -845,8 +847,9 @@ ipcMain.handle('yt:config', (_e, cfg) => {
 });
 ipcMain.handle('import:url', async (_e, url) => {
   if (/spotify\.com|^spotify:/.test(url)) return importSpotify(url, log);
+  if (/music\.yandex\./.test(url)) return importYandex(url, log);
   if (/soundcloud\.com/.test(url)) { const pls = await sc.importUrl(url); pls.forEach((p) => remember(p.tracks)); return pls; }
-  throw new Error('Поддерживаются ссылки Spotify (плейлист, альбом, трек) и SoundCloud (профиль, лайки, плейлист)');
+  throw new Error('Поддерживаются ссылки Spotify, Яндекс Музыки и SoundCloud');
 });
 ipcMain.handle('import:csv', (_e, name, text) => importCsv(name, text, log));
 ipcMain.handle('cache:clear', () => {
