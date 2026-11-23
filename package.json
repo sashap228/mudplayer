@@ -10,11 +10,11 @@
   },
   "dependencies": {
     "youtubei.js": "latest",
-    "electron-updater": "latest"
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "latest",
-    "electron-builder": "latest"
+    "electron-builder": "^26.0.0"
   },
   "author": "muderSSS",
   "build": {
