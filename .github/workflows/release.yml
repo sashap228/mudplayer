@@ -1,5 +1,5 @@
 # Собирает установщик Windows на серверах GitHub и публикует релиз.
-# Новая версия = поменять "version" в package.json и запушить в main.
+# Новая версия = поменять "version" в package.json (и заметки в .github/release-notes.md) и запушить в main.
 # Приложения у пользователей увидят релиз и обновятся сами.
 name: Release
 on:
@@ -29,16 +29,18 @@ jobs:
           V=$(node -p "require('./package.json').version")
           echo "version=$V" >> $GITHUB_OUTPUT
           if gh release view "v$V" >/dev/null 2>&1; then echo "exists=1" >> $GITHUB_OUTPUT; echo "v$V уже выпущена"; else echo "exists=0" >> $GITHUB_OUTPUT; fi
-      - name: Tag the version
-        if: steps.check.outputs.exists == '0'
-        shell: bash
-        run: |
-          V=${{ steps.check.outputs.version }}
-          git config user.name "github-actions"; git config user.email "github-actions@users.noreply.github.com"
-          git tag -f "v$V" && git push -f origin "v$V"
       - if: steps.check.outputs.exists == '0'
         run: npm install --no-audit --no-fund
-      - if: steps.check.outputs.exists == '0'
-        run: npx electron-builder --win nsis --x64 --publish always
+      - name: Build installer
+        if: steps.check.outputs.exists == '0'
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Publish release
+        if: steps.check.outputs.exists == '0'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V=${{ steps.check.outputs.version }}
+          ls -la dist
+          NOTES=.github/release-notes.md; [ -f "$NOTES" ] || { echo "MudPlayer $V" > /tmp/n.md; NOTES=/tmp/n.md; }
+          gh release create "v$V" dist/*.exe dist/*.blockmap dist/latest.yml --target "$GITHUB_SHA" --title "MudPlayer $V" --notes-file "$NOTES" --latest

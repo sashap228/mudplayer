@@ -1,7 +1,7 @@
 {
   "name": "mudplayer",
   "productName": "MudPlayer",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Desktop music player: YouTube Music + SoundCloud + Audius, synced lyrics, Dynamic Island",
   "main": "main/main.js",
   "scripts": {
@@ -53,7 +53,8 @@
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico"
+      "uninstallerIcon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "publish": [
       {
