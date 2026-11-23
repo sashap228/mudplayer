@@ -284,17 +284,17 @@ kbd{font-family:'JetBrains Mono',monospace;font-size:10px;border:1px solid var(-
 .fsl-sync{position:absolute;right:56px;top:16px;z-index:2;background:rgba(0,0,0,.25)}
 
 /* wave visualizer */
-.wviz{position:relative;width:100%;overflow:hidden}
+.wviz{position:relative;width:100%;overflow:hidden;-webkit-mask-image:radial-gradient(farthest-side,#000 72%,transparent 100%);mask-image:radial-gradient(farthest-side,#000 72%,transparent 100%)}
 .wviz canvas{position:absolute;inset:0;width:100%;height:100%}
-.wviz-blob{filter:blur(38px) saturate(1.15);transform:scale(1.1)}
+
 .hero{isolation:isolate}
-.hero-viz{position:absolute;inset:-40px -60px auto auto;width:70%;opacity:.75;pointer-events:none;z-index:-1;-webkit-mask-image:radial-gradient(closest-side,#000 40%,transparent)}
+.hero-viz{position:absolute;right:20px;top:50%;transform:translateY(-50%);width:300px;pointer-events:none;z-index:-1;opacity:.6}
 .hero:before{display:none}
 
 /* wave page */
 .wave-page{max-width:1100px}
 .wstage{position:relative;border:1px solid var(--line);border-radius:22px;overflow:hidden;background:radial-gradient(120% 90% at 50% 50%,hsl(var(--ah) calc(var(--ts) * .6%) 12%),#0B0B0D 70%)}
-.wcenter{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px}
+.wcenter{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;padding:0 30px 30px;margin-top:-6px}
 .wtitle{font-size:34px;font-weight:700;letter-spacing:-.04em;line-height:1.08;margin-top:8px;max-width:640px;text-shadow:0 2px 30px rgba(0,0,0,.5)}
 .wart{color:rgba(255,255,255,.7);margin-top:6px;font-size:15px}
 .wbtns{display:flex;align-items:center;gap:22px;margin-top:26px}

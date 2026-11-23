@@ -259,75 +259,78 @@ function Artists({ list, onOpen }) {
 
 /* ───────────── «Моя волна»: живой визуализатор ─────────────
    Размытые «капли» цвета обложки дышат под музыку + тонкие линии-волны поверх. */
-function WaveViz({ pal, playing, height = 420, lines = true, intensity = 1 }) {
-  const blobRef = useRef(null), lineRef = useRef(null);
+// Шар «Моей волны» в духе голосового режима ChatGPT: внутри плывут облака цвета обложки,
+// шар дышит и подпрыгивает под музыку, от сильных долей расходятся кольца.
+function WaveViz({ pal, playing, height = 420, intensity = 1, size = .62 }) {
+  const ref = useRef(null);
   const palRef = useRef(pal); palRef.current = pal;
   const playRef = useRef(playing); playRef.current = playing;
   useEffect(() => {
-    let raf, t = 0, last = performance.now(), lv = [0, 0, 0, 0, 0], visible = true;
-    const cvs = [blobRef.current, lineRef.current].filter(Boolean);
-    const fit = () => cvs.forEach((c) => { const r = c.getBoundingClientRect(); const dpr = Math.min(devicePixelRatio || 1, 1.5); c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr); });
-    fit(); const ro = new ResizeObserver(fit); cvs.forEach((c) => ro.observe(c));
-    const io = new IntersectionObserver(([e]) => (visible = e.isIntersecting)); io.observe(cvs[0]);
+    const c = ref.current; const x = c.getContext('2d');
+    let raf, t = 0, last = performance.now(), lv = [0, 0, 0, 0, 0], en = 0, prevEn = 0, visible = true, rings = [], cooldown = 0;
+    const fit = () => { const r = c.getBoundingClientRect(); const dpr = Math.min(devicePixelRatio || 1, 2); c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr); };
+    fit(); const ro = new ResizeObserver(fit); ro.observe(c);
+    const io = new IntersectionObserver(([e]) => (visible = e.isIntersecting)); io.observe(c);
     const loop = (now) => {
       raf = requestAnimationFrame(loop);
       if (!visible || document.hidden) { last = now; return; }
       const dt = Math.min(.05, (now - last) / 1000); last = now;
       const target = playRef.current ? levels.get() : [0, 0, 0, 0, 0];
-      lv = lv.map((v, i) => v + ((target[i] || 0) - v) * Math.min(1, dt * 8));
-      const energy = (lv[0] * 1.4 + lv[1] + lv[2] * .8) / 3.2;
-      t += dt * (playRef.current ? .55 + energy * 1.6 : .18);
-      const { h = 30, ts = 30 } = palRef.current || {};
-      const S = clamp(ts * 1.5, 30, 80);
-      // капли
-      const b = blobRef.current, x = b.getContext('2d'), W = b.width, H = b.height;
-      x.clearRect(0, 0, W, H);
-      x.globalCompositeOperation = 'lighter';
-      const R = Math.min(W, H) * .36 * intensity;
-      for (let j = 0; j < 4; j++) {
-        const cx = W / 2 + Math.cos(t * .4 + j * 1.7) * W * .12, cy = H / 2 + Math.sin(t * .33 + j * 2.1) * H * .1;
-        const rr = R * (0.75 + j * .12) * (1 + energy * .35 + lv[j % 5] * .15);
-        x.beginPath();
-        for (let k = 0; k <= 96; k++) {
-          const a = (k / 96) * Math.PI * 2;
-          const n = Math.sin(3 * a + t * 1.1 + j) * .5 + Math.sin(5 * a - t * 1.4 + j * 2) * .3 + Math.sin(2 * a + t * .6 + j) * .2;
-          const r = rr * (1 + n * (.12 + lv[(k + j) % 5] * .18));
-          const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
-          k ? x.lineTo(px, py) : x.moveTo(px, py);
-        }
-        const g = x.createRadialGradient(cx, cy, 0, cx, cy, rr * 1.2);
-        g.addColorStop(0, `hsla(${h + j * 22},${S}%,${60 - j * 6}%,.55)`);
-        g.addColorStop(1, `hsla(${h + j * 22 + 30},${S}%,40%,0)`);
-        x.fillStyle = g; x.fill();
+      lv = lv.map((v, i) => v + ((target[i] || 0) - v) * Math.min(1, dt * 10));
+      prevEn = en; en = (lv[0] * 1.5 + lv[1] * 1.1 + lv[2] * .8 + lv[3] * .4) / 3.8;
+      t += dt * (playRef.current ? .6 + en * 1.4 : .25);
+      cooldown -= dt;
+      if (playRef.current && en - prevEn > .045 && cooldown <= 0) { rings.push({ a: 0 }); cooldown = .35; }
+      const W = c.width, H = c.height; x.clearRect(0, 0, W, H);
+      const { h = 210, ts = 40 } = palRef.current || {};
+      const S = clamp(ts * 1.6, 35, 85);
+      const base = Math.min(W, H) * size * .5 * intensity;
+      const R = base * (1 + en * .14 + Math.sin(t * 1.3) * .012);
+      const cx = W / 2, cy = H / 2 + Math.sin(t * .9) * base * .04;
+      // кольца
+      rings = rings.filter((r) => (r.a += dt / 1.3) < 1);
+      for (const r of rings) {
+        x.beginPath(); x.arc(cx, cy, R * (1 + r.a * .7), 0, Math.PI * 2);
+        x.strokeStyle = `hsla(${h},${S}%,75%,${(1 - r.a) * .35})`; x.lineWidth = base * .02 * (1 - r.a) + 1; x.stroke();
+      }
+      // свечение
+      const glow = x.createRadialGradient(cx, cy, R * .8, cx, cy, Math.min(R * 1.75, H / 2 - 2, W / 2 - 2));
+      glow.addColorStop(0, `hsla(${h},${S}%,60%,${.28 + en * .35})`); glow.addColorStop(1, `hsla(${h},${S}%,50%,0)`);
+      x.fillStyle = glow; x.fillRect(0, 0, W, H);
+      // шар
+      x.save(); x.beginPath(); x.arc(cx, cy, R, 0, Math.PI * 2); x.clip();
+      const bg = x.createRadialGradient(cx - R * .35, cy - R * .4, R * .05, cx, cy, R);
+      bg.addColorStop(0, `hsl(${h + 10},${S}%,72%)`); bg.addColorStop(.55, `hsl(${h + 25},${S}%,48%)`); bg.addColorStop(1, `hsl(${h + 45},${S * .8}%,24%)`);
+      x.fillStyle = bg; x.fillRect(cx - R, cy - R, R * 2, R * 2);
+      x.globalCompositeOperation = 'screen';
+      const blobs = [[-30, .62, 66], [35, .55, 58], [70, .5, 52], [0, .45, 80], [180, .4, 62]];
+      blobs.forEach(([dh, rr, L], i) => {
+        const sp = .35 + i * .13;
+        const bx = cx + Math.cos(t * sp + i * 1.9) * R * (.35 + lv[i] * .25);
+        const by = cy + Math.sin(t * sp * 1.2 + i * 2.7) * R * (.32 + lv[(i + 2) % 5] * .25);
+        const br = R * rr * (1 + lv[i] * .4);
+        const g = x.createRadialGradient(bx, by, 0, bx, by, br);
+        g.addColorStop(0, `hsla(${h + dh},${i === 3 ? 30 : S}%,${L}%,.75)`); g.addColorStop(1, `hsla(${h + dh},${S}%,${L}%,0)`);
+        x.fillStyle = g; x.beginPath(); x.arc(bx, by, br, 0, Math.PI * 2); x.fill();
+      });
+      // белые «облака» как у ChatGPT
+      for (let i = 0; i < 2; i++) {
+        const bx = cx + Math.cos(t * .5 + i * 3) * R * .4, by = cy - R * .25 + Math.sin(t * .7 + i) * R * .2, br = R * (.5 + en * .2);
+        const g = x.createRadialGradient(bx, by, 0, bx, by, br);
+        g.addColorStop(0, `rgba(255,255,255,${.38 + en * .2})`); g.addColorStop(1, 'rgba(255,255,255,0)');
+        x.fillStyle = g; x.beginPath(); x.arc(bx, by, br, 0, Math.PI * 2); x.fill();
       }
       x.globalCompositeOperation = 'source-over';
-      // линии
-      const L = lineRef.current; if (!L) return;
-      const y = L.getContext('2d'), LW = L.width, LH = L.height;
-      y.clearRect(0, 0, LW, LH);
-      for (let j = 0; j < 3; j++) {
-        y.beginPath();
-        const amp = LH * (.05 + energy * .16 + lv[j + 1] * .06) * intensity;
-        for (let k = 0; k <= 160; k++) {
-          const px = (k / 160) * LW, u = k / 160;
-          const env = Math.sin(u * Math.PI);
-          const py = LH / 2 + env * amp * (Math.sin(u * 7 + t * 2.2 + j * 1.3) * .6 + Math.sin(u * 13 - t * 1.6 + j) * .4);
-          k ? y.lineTo(px, py) : y.moveTo(px, py);
-        }
-        y.strokeStyle = `hsla(${h + j * 25},${S}%,${78 - j * 8}%,${.55 - j * .12})`;
-        y.lineWidth = (2.2 - j * .5) * Math.min(devicePixelRatio || 1, 1.5);
-        y.stroke();
-      }
+      const rim = x.createRadialGradient(cx, cy, R * .6, cx, cy, R);
+      rim.addColorStop(0, 'rgba(0,0,0,0)'); rim.addColorStop(1, 'rgba(0,0,0,.28)');
+      x.fillStyle = rim; x.fillRect(cx - R, cy - R, R * 2, R * 2);
+      x.restore();
+      x.beginPath(); x.arc(cx, cy, R, 0, Math.PI * 2); x.strokeStyle = 'rgba(255,255,255,.12)'; x.lineWidth = 1.2; x.stroke();
     };
     raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); };
-  }, []);
-  return (
-    <div className="wviz" style={{ height }}>
-      <canvas ref={blobRef} className="wviz-blob" />
-      {lines && <canvas ref={lineRef} className="wviz-lines" />}
-    </div>
-  );
+  }, [size, intensity]);
+  return <div className="wviz" style={{ height }}><canvas ref={ref} /></div>;
 }
 
 const CHARACTERS = [['любимое', 'Любимое', 'Похожее на то, что ты слушаешь'], ['незнакомое', 'Незнакомое', 'Новые артисты'], ['популярное', 'Популярное', 'Чарты и хиты']];
@@ -350,7 +353,7 @@ function WavePage({ P }) {
   return (
     <div className="page wave-page">
       <div className="wstage">
-        <WaveViz pal={pal} playing={playing && waveMode} height={440} />
+        <WaveViz pal={pal} playing={playing && waveMode} height={360} size={.66} />
         <div className="wcenter">
           <div className="label" style={{ color: 'rgba(255,255,255,.55)' }}>Моя волна</div>
           {on ? <>
@@ -408,7 +411,7 @@ function Home({ P }) {
       <div className="h1" style={{ marginTop: 6, marginBottom: 22 }}>Что включим?</div>
 
       <div className="hero">
-        <div className="hero-viz"><WaveViz pal={P.pal} playing={P.playing && P.waveMode} height={340} lines={false} intensity={.8} /></div>
+        <div className="hero-viz"><WaveViz pal={P.pal} playing={P.playing && P.waveMode} height={260} size={.7} /></div>
         <div className="hero-top">
           <div>
             <h2>Моя волна</h2>
@@ -894,6 +897,13 @@ function App() {
 
   st.current = { ...st.current, next, prev, toggle, seek };
 
+  // поток SoundCloud приходит частями: браузер сначала думает, что трек длится ~10 с (первый кусок).
+  // Если длительность из плеера сильно расходится с метаданными трека — верим метаданным.
+  const fixDur = (d) => {
+    const td = st.current.cur?.duration || st.current.playable?.duration || 0;
+    if (!td) return d;
+    return d < td * 0.85 || d > td * 1.6 ? td : d;
+  };
   useEffect(() => {
     const a = audio.current;
     const on = {
@@ -902,8 +912,8 @@ function App() {
       waiting: () => setLoading(true),
       canplay: () => setLoading(false),
       ended: () => st.current.next(true),
-      loadedmetadata: () => { if (isFinite(a.duration)) setDur(a.duration); },
-      durationchange: () => { if (isFinite(a.duration) && a.duration > 0) setDur(a.duration); },
+      loadedmetadata: () => { if (isFinite(a.duration)) setDur(fixDur(a.duration)); },
+      durationchange: () => { if (isFinite(a.duration) && a.duration > 0) setDur(fixDur(a.duration)); },
       error: () => {
         if (!a.src || !st.current.cur) return;
         // SoundCloud/YouTube→SoundCloud: если формат не декодировался — повторяем через yt-dlp, а не пропускаем

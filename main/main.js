@@ -565,6 +565,11 @@ async function ensureCached(t) {
       if (info.protocol === 'progressive') return await cacheProgressive('scn' + t.scid, info.url, info.mime);
       const e = scBuffer(t.scid); await e.ready; return 'scn' + t.scid;
     } catch (err) {
+      if (err.drm || /^DRM/.test(err.message)) {
+        const alt = t.title ? await matchTrack({ title: t.title, artist: t.artist, duration: t.duration }, { only: 'sc', exclude: t.scid }) : null;
+        if (!alt || alt.scid === t.scid) throw new Error('трек защищён DRM, замены нет');
+        return ensureCached(alt);
+      }
       log(`sc ${t.scid} cache via yt-dlp:`, err.message);
       const e = dlFile('sc' + t.scid, t.url || `https://api.soundcloud.com/tracks/${t.scid}`, 'bestaudio[protocol=http]/bestaudio[ext=mp3]/bestaudio[ext=m4a]/bestaudio[ext=opus]/bestaudio');
       await e.ready; await waitDone(e); return 'sc' + t.scid;
@@ -642,6 +647,26 @@ async function serveHls(req, res, e) {
   res.end();
 }
 
+// YouTube не отдаёт (бот-проверка) → тот же трек на SoundCloud
+const altCache = new Map();
+function ytAlternative(t) {
+  const k = t.vid;
+  if (!altCache.has(k)) {
+    const p = matchTrack({ title: t.title, artist: t.artist, duration: t.duration }, { only: 'sc' });
+    altCache.set(k, p); p.then((r) => !r && altCache.delete(k), () => altCache.delete(k));
+  }
+  return altCache.get(k);
+}
+// трек SoundCloud под DRM → другая загрузка того же трека на SoundCloud
+const drmAlt = new Map();
+async function serveAlternative(req, res, t, opt, why) {
+  if (!t.title) { res.writeHead(502, { 'Access-Control-Allow-Origin': '*' }); return res.end(why); }
+  if (!drmAlt.has(t.scid)) drmAlt.set(t.scid, matchTrack({ title: t.title, artist: t.artist, duration: t.duration }, { only: 'sc', exclude: t.scid }).catch(() => null));
+  const alt = await drmAlt.get(t.scid);
+  if (!alt || alt.scid === t.scid) { log(`sc ${t.scid} ${why}, замены нет`); res.writeHead(502, { 'Access-Control-Allow-Origin': '*' }); return res.end(why); }
+  log(`sc ${t.scid} ${why} → sc ${alt.scid} "${alt.artist} - ${alt.title}"`);
+  return handleStream(req, res, alt, opt);
+}
 async function handleStream(req, res, t, opt = {}) {
   if (!opt.dl) { const hit = findCached(t); if (hit) return serveGrowing(req, res, hit); }
   if (t.src === 'sc' && !t.scid) t.scid = scByUrl.get(t.url) || (await sc.resolveId(t.url));
@@ -669,7 +694,10 @@ async function handleStream(req, res, t, opt = {}) {
           return;
         }
         return await serveHls(req, res, scBuffer(t.scid));
-      } catch (e) { log(`sc ${t.scid} native failed → yt-dlp:`, e.message); scNativeFailed.add(t.scid); }
+      } catch (e) {
+        if (e.drm || /^DRM/.test(e.message)) return serveAlternative(req, res, t, opt, 'DRM');
+        log(`sc ${t.scid} native failed → yt-dlp:`, e.message); scNativeFailed.add(t.scid);
+      }
     }
     // запасной путь: yt-dlp умеет все форматы SoundCloud
     const page = t.url || `https://api.soundcloud.com/tracks/${t.scid}`;
@@ -701,15 +729,15 @@ function score(c, t) {
   if (BAD.test(c.title) && !BAD.test(t.title)) s -= 1.3;
   return s;
 }
-async function matchTrack(t, { only } = {}) {
-  const key = (only ? only + ':' : 'm:') + norm(t.artist) + '|' + norm(t.title);
+async function matchTrack(t, { only, exclude } = {}) {
+  const key = (only ? only + ':' : 'm:') + (exclude ? 'x' + exclude + ':' : '') + norm(t.artist) + '|' + norm(t.title);
   const cached = store.get('match', {})[key];
   if (cached) return remember([cached])[0];
   const q = `${(t.artist || '').split(/,|&| x /)[0]} ${cleanTitle(t.title).replace(/\s*[([](prod|при уч|feat|ft)[^)\]]*[)\]]/gi, '')}`.trim();
   const t0 = Date.now();
   const useYt = !only && !ytBlocked;
   const [scL, ytL] = await Promise.all([settle('match sc', sc.search(q, 10)), useYt ? settle('match yt', ytmSearch(q, 8)) : []]);
-  const cands = [...scL.map((c) => ({ c, s: score(c, t) + 0.15 })), ...ytL.map((c) => ({ c, s: score(c, t) + 0.1 }))].sort((x, y) => y.s - x.s);
+  const cands = [...scL.filter((c) => c.scid !== exclude).map((c) => ({ c, s: score(c, t) + 0.15 })), ...ytL.map((c) => ({ c, s: score(c, t) + 0.1 }))].sort((x, y) => y.s - x.s);
   const best = cands[0];
   log(`match "${q}" → ${best ? `${best.c.src} "${best.c.artist} - ${best.c.title}" s=${best.s.toFixed(2)}` : 'none'} ${Date.now() - t0}ms`);
   if (!best || best.s < 1.2) return null;

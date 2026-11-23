@@ -33,6 +33,9 @@ module.exports = function createSoundCloud({ log, store }) {
   }
 
   const art = (u) => (u || '').replace(/-(large|t\d+x\d+|small|badge|crop)\./, '-t500x500.');
+  // DRM-потоки (cbc-/ctr-encrypted-hls, подписка Go+) не играет ни один сторонний плеер
+  const isPlayableTr = (x) => x.url && !x.snipped && !/^abr/.test(x.preset || '') && !/^(ctr|cbc)-/.test(x.format?.protocol || '');
+  const drmOnly = (t) => (t.media?.transcodings || []).length > 0 && !(t.media.transcodings || []).some(isPlayableTr);
   const snipped = (t) => t.policy === 'SNIP' || t.policy === 'BLOCK' || (t.duration && t.full_duration && t.full_duration - t.duration > 2000)
     || (t.media?.transcodings || []).every((x) => x.snipped);
   function map(t) {
@@ -41,10 +44,11 @@ module.exports = function createSoundCloud({ log, store }) {
       id: 'sc:' + t.id, src: 'sc', scid: t.id, url: t.permalink_url, title: t.title,
       artist: t.publisher_metadata?.artist || t.user?.username || '', artistId: t.user?.id,
       duration: Math.round((t.full_duration || t.duration || 0) / 1000), cover: art(t.artwork_url || t.user?.avatar_url),
-      preview: snipped(t) || undefined,
+      preview: snipped(t) || undefined, drm: drmOnly(t) || undefined,
     };
   }
-  const full = (list) => list.map(map).filter((t) => t && !t.preview);
+  // для поиска/волны — только то, что реально играет; для импорта — всё, DRM-треки заменятся при воспроизведении
+  const full = (list, { keepDrm = false } = {}) => list.map(map).filter((t) => t && !t.preview && (keepDrm || !t.drm));
 
   async function search(q, limit = 20) {
     const j = await api(`/search/tracks?q=${encodeURIComponent(q)}&limit=${limit + 10}&linked_partitioning=1`);
@@ -86,7 +90,7 @@ module.exports = function createSoundCloud({ log, store }) {
   async function trackStreamInfo(scid) {
     const t = await api(`/tracks/${scid}`);
     const list = rankTranscodings(t);
-    if (!list.length) throw new Error('у трека нет доступного потока: ' + (t.media?.transcodings || []).map((x) => `${x.preset}/${x.format?.protocol}`).join(','));
+    if (!list.length) throw Object.assign(new Error('DRM: у трека нет доступного потока: ' + (t.media?.transcodings || []).map((x) => `${x.preset}/${x.format?.protocol}`).join(',')), { drm: true });
     let lastErr;
     for (const pick of list) {
       try {
@@ -158,15 +162,15 @@ module.exports = function createSoundCloud({ log, store }) {
     const obj = await resolveUrl(isLikes ? clean : url);
     const playlists = [];
     if (obj.kind === 'playlist') {
-      const tracks = full(await hydrate(obj.tracks || []));
+      const tracks = full(await hydrate(obj.tracks || []), { keepDrm: true });
       playlists.push({ id: 'scpl:' + obj.id, name: obj.title, cover: art(obj.artwork_url) || tracks[0]?.cover, source: 'sc', tracks });
     } else if (obj.kind === 'user') {
       const likes = await paged(`/users/${obj.id}/track_likes`);
-      const lt = full(likes.map((x) => x.track).filter(Boolean));
+      const lt = full(likes.map((x) => x.track).filter(Boolean), { keepDrm: true });
       if (lt.length) playlists.push({ id: 'sclikes:' + obj.id, name: `Лайки ${obj.username}`, cover: art(obj.avatar_url), source: 'sc', tracks: lt });
       if (!isLikes) {
         const pls = await paged(`/users/${obj.id}/playlists_without_albums`, 200).catch(() => paged(`/users/${obj.id}/playlists`, 200));
-        const hyd = await Promise.all(pls.slice(0, 40).map((p) => hydrate(p.tracks || []).then(full).catch(() => [])));
+        const hyd = await Promise.all(pls.slice(0, 40).map((p) => hydrate(p.tracks || []).then((l) => full(l, { keepDrm: true })).catch(() => [])));
         pls.slice(0, 40).forEach((p, i) => {
           if (hyd[i].length) playlists.push({ id: 'scpl:' + p.id, name: p.title, cover: art(p.artwork_url) || hyd[i][0]?.cover, source: 'sc', tracks: hyd[i] });
         });
