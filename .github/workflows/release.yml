@@ -1,12 +1,17 @@
 # Собирает установщик Windows на серверах GitHub и публикует релиз.
-# Запускается, когда в репозиторий пушится тег вида v0.6.0 (или вручную из вкладки Actions).
+# Новая версия = поменять "version" в package.json и запушить в main.
+# Приложения у пользователей увидят релиз и обновятся сами.
 name: Release
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: ['package.json', '.github/workflows/release.yml']
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -15,7 +20,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
-      - run: npx electron-builder --win nsis --x64 --publish always
+      - name: Skip if this version is already released
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V" >> $GITHUB_OUTPUT
+          if gh release view "v$V" >/dev/null 2>&1; then echo "exists=1" >> $GITHUB_OUTPUT; echo "v$V уже выпущена"; else echo "exists=0" >> $GITHUB_OUTPUT; fi
+      - if: steps.check.outputs.exists == '0'
+        run: npm install --no-audit --no-fund
+      - if: steps.check.outputs.exists == '0'
+        run: npx electron-builder --win nsis --x64 --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
