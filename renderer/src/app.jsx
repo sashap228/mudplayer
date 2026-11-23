@@ -425,7 +425,7 @@ void main(){
   gl_FragColor=vec4(col,alpha);
 }`;
 const hsl2rgb = (h, s, l) => { s /= 100; l /= 100; const k = (n) => (n + h / 30) % 12; const a = s * Math.min(l, 1 - l); const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return [f(0), f(8), f(4)]; };
-function WaveViz(props) {
+function WaveVizGL(props) {
   const { pal, playing, height = 420, size = .62, interactive = false } = props;
   const ref = useRef(null);
   const [gl2d, setGl2d] = useState(false);
@@ -508,6 +508,101 @@ function WaveViz(props) {
     };
   }, [size, interactive]);
   if (gl2d) return <WaveViz2D {...props} />;
+  return <div className={`wviz orb3d ${interactive ? 'interactive' : ''}`} style={{ height }}><canvas ref={ref} /></div>;
+}
+
+/* ───────────── «Звёздная пыль»: сфера из тысяч светящихся точек ─────────────
+   Медленно вращается и плывёт, по поверхности бегут волны. Музыка раскладывается по широтам:
+   басы качают низ сферы, верха — верх; на ударах точки разлетаются и собираются обратно.
+   Можно схватить и тянуть — сфера вытягивается за курсором и пружинит, клик — вздрагивает. */
+function WaveViz({ pal, playing, height = 420, size = .62, interactive = false }) {
+  const ref = useRef(null);
+  const palRef = useRef(pal); palRef.current = pal;
+  const playRef = useRef(playing); playRef.current = playing;
+  useEffect(() => {
+    const c = ref.current; const x = c.getContext('2d');
+    const N = 2600, pts = new Float32Array(N * 4);
+    for (let i = 0; i < N; i++) { const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), th = i * 2.399963; pts.set([Math.cos(th) * r, y, Math.sin(th) * r, Math.random()], i * 4); }
+    let raf, t = Math.random() * 50, last = performance.now(), lv = [0, 0, 0, 0, 0], en = 0, visible = true, dpr = 1;
+    const P = { drag: false, hover: false, m: [0, 0], amt: 0, vel: 0, dir: [0, 0, 1], tdir: [0, 0, 1], off: [0, 0], offV: [0, 0], down: 0, downM: [0, 0] };
+    const fit = () => { const r = c.getBoundingClientRect(); dpr = Math.min(devicePixelRatio || 1, 1.5); c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr); };
+    fit(); const ro = new ResizeObserver(fit); ro.observe(c);
+    const io = new IntersectionObserver(([e]) => (visible = e.isIntersecting)); io.observe(c);
+    const toUv = (e) => { const r = c.getBoundingClientRect(); return [((e.clientX - r.left) - r.width / 2) / r.height, ((r.bottom - e.clientY) - r.height / 2) / r.height]; };
+    const onDown = (e) => { if (!interactive) return; P.drag = true; P.m = toUv(e); P.down = performance.now(); P.downM = P.m; c.setPointerCapture(e.pointerId); c.classList.add('grab'); };
+    const onMove = (e) => { P.m = toUv(e); P.hover = true; };
+    const onUp = () => {
+      if (!P.drag) return; P.drag = false; c.classList.remove('grab');
+      if (performance.now() - P.down < 250 && Math.hypot(P.m[0] - P.downM[0], P.m[1] - P.downM[1]) < .03) { P.vel += 5.5; P.tdir = [P.m[0] * 1.5, P.m[1] * 1.5, .9]; }
+    };
+    const onLeave = () => { P.hover = false; };
+    c.addEventListener('pointerdown', onDown); c.addEventListener('pointermove', onMove); c.addEventListener('pointerup', onUp); c.addEventListener('pointercancel', onUp); c.addEventListener('pointerleave', onLeave);
+    let cols = null;
+    const loop = (now) => {
+      raf = requestAnimationFrame(loop);
+      if (!visible || document.hidden) { last = now; return; }
+      const dt = Math.min(.05, (now - last) / 1000); last = now;
+      const target = playRef.current ? levels.get() : [0, 0, 0, 0, 0];
+      lv = lv.map((v, i) => v + ((target[i] || 0) - v) * Math.min(1, dt * 12));
+      const e = (lv[0] * 1.5 + lv[1] * 1.1 + lv[2] * .8 + lv[3] * .4) / 3.8;
+      en += (e - en) * Math.min(1, dt * 10);
+      t += dt * (playRef.current ? .7 + en * 1.2 : .3);
+      // физика оттягивания
+      const len = Math.hypot(P.m[0], P.m[1]); let pullT = 0;
+      if (P.drag) { pullT = clamp((len - .12) * 1.7, 0, .8); P.tdir = [P.m[0] * 2.2, P.m[1] * 2.2, .55]; }
+      else if (P.hover && interactive && len < .7) { pullT = .07; P.tdir = [P.m[0] * 2, P.m[1] * 2, .8]; }
+      const K = P.drag ? 140 : 55, C = P.drag ? 20 : 4.2;
+      P.vel += (-K * (P.amt - pullT) - C * P.vel) * dt; P.amt = clamp(P.amt + P.vel * dt, -.45, .85);
+      const nd = Math.hypot(...P.tdir) || 1; P.dir = P.dir.map((v, i) => v + (P.tdir[i] / nd - v) * Math.min(1, dt * (P.drag ? 14 : 6)));
+      const dl = Math.hypot(...P.dir) || 1; const dir = P.dir.map((v) => v / dl);
+      const toff = P.drag ? [P.m[0] * .12, P.m[1] * .12] : [0, 0];
+      P.offV = P.offV.map((v, i) => v + (-40 * (P.off[i] - toff[i]) - 6 * v) * dt); P.off = P.off.map((v, i) => v + P.offV[i] * dt);
+      const wob = Math.min(.25, Math.abs(P.vel) * .03);
+      // цвета обложки: низ → середина → верх
+      const { h = 220, ts = 45 } = palRef.current || {};
+      const S = clamp(ts * 1.5 + 10, 45, 88);
+      const want = [hsl2rgb(h, S, 58), hsl2rgb((h + 50) % 360, S, 66), hsl2rgb((h + 320) % 360, clamp(S - 10, 40, 80), 80)].map((cc) => cc.map((v) => v * 255));
+      cols = cols ? cols.map((cc, i) => cc.map((v, k) => v + (want[i][k] - v) * Math.min(1, dt * 2))) : want;
+      const W = c.width, H = c.height; x.clearRect(0, 0, W, H);
+      const R = H * size * .5 * (1 + en * .08);
+      const cx = W / 2 + P.off[0] * H, cy = H / 2 - Math.sin(t * .6) * H * .025 - P.off[1] * H;
+      const ay = t * .22, ax = Math.sin(t * .17) * .45 + .25;
+      const cA = Math.cos(ay), sA = Math.sin(ay), cX = Math.cos(ax), sX = Math.sin(ax);
+      // мягкое свечение позади
+      const g = x.createRadialGradient(cx, cy, R * .1, cx, cy, R * 1.45);
+      g.addColorStop(0, `rgba(${cols[1].map((v) => v | 0)},${.16 + en * .2})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+      x.fillStyle = g; x.fillRect(0, 0, W, H);
+      x.globalCompositeOperation = 'lighter';
+      const amp = P.amt, d0 = dir[0], d1 = dir[1], d2 = dir[2];
+      for (let i = 0; i < N; i++) {
+        const o = i * 4, px = pts[o], py = pts[o + 1], pz = pts[o + 2], rnd = pts[o + 3];
+        const k = (py + 1) / 2;
+        const band = lv[Math.min(4, (4 - k * 4.99) | 0)] || 0; // низ сферы — басы
+        const wave = Math.sin(py * 6 + t * 2.4) * .035 + Math.sin(px * 5 - t * 1.7) * .03 + Math.sin(pz * 7 + t * 1.3) * .02;
+        const kick = (band * .13 + en * .05 + wob * .6) * (.35 + rnd) * (.6 + .4 * Math.sin(t * 3 + rnd * 6.28));
+        // поворачиваем точку, потом тянем в экранных координатах — сфера вытягивается ровно к курсору
+        const rx = px * cA + pz * sA; let rz = -px * sA + pz * cA; const ry = py * cX - rz * sX; rz = py * sX + rz * cX;
+        const dp = rx * d0 + ry * d1 + rz * d2;
+        const pull = dp > 0 ? amp * dp * dp * dp * dp * .95 + amp * dp * .1 : amp < 0 ? amp * .1 : 0;
+        const rr = 1 + wave + kick + pull;
+        const X2 = rx * rr, Y2 = ry * rr, Z2 = rz * rr;
+        const persp = 2.6 / (2.6 - Z2 * .8);
+        const sx = cx + X2 * R * persp, sy = cy - Y2 * R * persp;
+        const depth = (Z2 + 1) / 2;
+        const ca = k < .5 ? cols[0] : cols[1], cb = k < .5 ? cols[1] : cols[2], f = k < .5 ? k * 2 : (k - .5) * 2;
+        const a = (.12 + depth * .78) * (.75 + band * .5);
+        const sz = (.7 + depth * 1.9) * dpr * (1 + band * .35);
+        x.fillStyle = `rgba(${(ca[0] + (cb[0] - ca[0]) * f) | 0},${(ca[1] + (cb[1] - ca[1]) * f) | 0},${(ca[2] + (cb[2] - ca[2]) * f) | 0},${a > 1 ? 1 : a})`;
+        x.fillRect(sx - sz / 2, sy - sz / 2, sz, sz);
+      }
+      x.globalCompositeOperation = 'source-over';
+    };
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf); ro.disconnect(); io.disconnect();
+      c.removeEventListener('pointerdown', onDown); c.removeEventListener('pointermove', onMove); c.removeEventListener('pointerup', onUp); c.removeEventListener('pointercancel', onUp); c.removeEventListener('pointerleave', onLeave);
+    };
+  }, [size, interactive]);
   return <div className={`wviz orb3d ${interactive ? 'interactive' : ''}`} style={{ height }}><canvas ref={ref} /></div>;
 }
 
