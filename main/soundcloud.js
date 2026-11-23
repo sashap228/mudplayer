@@ -1,16 +1,31 @@
 // SoundCloud через api-v2 напрямую (без yt-dlp): поиск ~300 мс, поток сразу.
 const { net } = require('electron');
 
+// fetch с тайм-аутом: зависший запрос больше не держит трек минуту
+async function tfetch(url, opts = {}, ms = 8000) {
+  const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), ms);
+  try { return await net.fetch(url, { ...opts, signal: ac.signal }); } finally { clearTimeout(tm); }
+}
+// «страхующий» запрос: если ответа нет за hedgeMs — параллельно шлём второй, берём первый пришедший
+async function hedgedBuffer(url, hedgeMs = 2500, ms = 9000) {
+  const one = async () => { const r = await tfetch(url, {}, ms); if (!r.ok) throw new Error('HTTP ' + r.status); return Buffer.from(await r.arrayBuffer()); };
+  return new Promise((resolve, reject) => {
+    let fails = 0, done = false;
+    const go = () => one().then((b) => { if (!done) { done = true; resolve(b); } }, (e) => { if (++fails >= 2 && !done) reject(e); });
+    go(); setTimeout(() => { if (!done) go(); }, hedgeMs);
+  });
+}
+
 module.exports = function createSoundCloud({ log, store }) {
   const API = 'https://api-v2.soundcloud.com';
   let clientId = store.get('sc_client_id') || null;
   let cidPromise = null;
 
   async function fetchClientId() {
-    const html = await (await net.fetch('https://soundcloud.com/')).text();
+    const html = await (await tfetch('https://soundcloud.com/', {}, 10000)).text();
     const scripts = [...html.matchAll(/<script[^>]+src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g)].map((m) => m[1]).reverse();
     for (const src of scripts) {
-      const js = await (await net.fetch(src)).text();
+      const js = await (await tfetch(src, {}, 10000)).text();
       const m = js.match(/client_id\s*[:=]\s*"([0-9a-zA-Z]{32})"/) || js.match(/client_id=([0-9a-zA-Z]{32})/);
       if (m) { log('soundcloud client_id found'); store.set('sc_client_id', m[1]); return m[1]; }
     }
@@ -26,7 +41,9 @@ module.exports = function createSoundCloud({ log, store }) {
     const id = await cid();
     const base = pathOrUrl.startsWith('http') ? pathOrUrl : API + pathOrUrl;
     const url = base + (base.includes('?') ? '&' : '?') + 'client_id=' + id;
-    const r = await net.fetch(url, { headers: { Accept: 'application/json' } });
+    let r;
+    try { r = await tfetch(url, { headers: { Accept: 'application/json' } }, 7000); }
+    catch (e) { if (retry) { log('sc api timeout, retry'); return api(pathOrUrl, false); } throw e; }
     if ((r.status === 401 || r.status === 403) && retry) { log('sc', r.status, '→ new client_id'); await cid(true); return api(pathOrUrl, false); }
     if (!r.ok) throw new Error(`SoundCloud HTTP ${r.status}`);
     return r.json();
@@ -107,11 +124,11 @@ module.exports = function createSoundCloud({ log, store }) {
   // HLS → один файл: качаем сегменты параллельно и склеиваем (mp3/fMP4/ogg склеиваются корректно).
   // Поддерживает AES-128 (encrypted-hls).
   async function assembleHls(m3u8Url, onPart) {
-    let text = await (await net.fetch(m3u8Url)).text();
+    let text = await (await tfetch(m3u8Url, {}, 7000)).text();
     let base = m3u8Url;
     if (/#EXT-X-STREAM-INF/.test(text)) { // мастер-плейлист → берём первый вариант
       const v = text.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#'));
-      base = new URL(v, m3u8Url).href; text = await (await net.fetch(base)).text();
+      base = new URL(v, m3u8Url).href; text = await (await tfetch(base, {}, 7000)).text();
     }
     const abs = (u) => new URL(u, base).href;
     const lines = text.split('\n').map((l) => l.trim());
@@ -124,7 +141,7 @@ module.exports = function createSoundCloud({ log, store }) {
       } else if (l && !l.startsWith('#')) segs.push({ url: abs(l), key, seq: seq++ });
     }
     const keys = new Map();
-    const getKey = (uri) => { if (!keys.has(uri)) keys.set(uri, net.fetch(uri).then((r) => r.arrayBuffer()).then((b) => Buffer.from(b))); return keys.get(uri); };
+    const getKey = (uri) => { if (!keys.has(uri)) keys.set(uri, hedgedBuffer(uri, 2000, 7000)); return keys.get(uri); };
     const crypto = require('crypto');
     const items = init ? [{ url: abs(init[1]), key: null }, ...segs] : segs;
     const bufs = new Array(items.length);
@@ -133,21 +150,21 @@ module.exports = function createSoundCloud({ log, store }) {
     const worker = async () => {
       while (next < items.length) {
         const i = next++; const it = items[i];
-        for (let a = 0; a < 3; a++) {
+        for (let a = 0; a < 4; a++) {
           try {
-            const r = await net.fetch(it.url); if (!r.ok) throw new Error('segment HTTP ' + r.status);
-            let b = Buffer.from(await r.arrayBuffer());
+            // первые сегменты — с подстраховкой: от них зависит, как быстро трек начнёт играть
+            let b = i < 3 ? await hedgedBuffer(it.url, 1800, 8000) : await hedgedBuffer(it.url, 4000, 12000);
             if (it.key && it.key.method === 'AES-128') {
               const k = await getKey(it.key.uri);
               const iv = it.key.iv ? Buffer.from(it.key.iv.padStart(32, '0'), 'hex') : (() => { const x = Buffer.alloc(16); x.writeUInt32BE(it.seq, 12); return x; })();
               const d = crypto.createDecipheriv('aes-128-cbc', k, iv); b = Buffer.concat([d.update(b), d.final()]);
             } else if (it.key) throw new Error('неподдерживаемое шифрование ' + it.key.method);
             bufs[i] = b; flush(); break;
-          } catch (e) { if (a === 2) throw e; }
+          } catch (e) { if (a === 3) throw e; }
         }
       }
     };
-    await Promise.all(Array.from({ length: 8 }, worker));
+    await Promise.all(Array.from({ length: 6 }, worker));
     return Buffer.concat(bufs);
   }
 

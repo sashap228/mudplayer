@@ -261,7 +261,7 @@ function Artists({ list, onOpen }) {
    Размытые «капли» цвета обложки дышат под музыку + тонкие линии-волны поверх. */
 // Шар «Моей волны» в духе голосового режима ChatGPT: внутри плывут облака цвета обложки,
 // шар дышит и подпрыгивает под музыку, от сильных долей расходятся кольца.
-function WaveViz({ pal, playing, height = 420, intensity = 1, size = .62 }) {
+function WaveViz2D({ pal, playing, height = 420, intensity = 1, size = .62 }) {
   const ref = useRef(null);
   const palRef = useRef(pal); palRef.current = pal;
   const playRef = useRef(playing); playRef.current = playing;
@@ -331,6 +331,140 @@ function WaveViz({ pal, playing, height = 420, intensity = 1, size = .62 }) {
     return () => { cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); };
   }, [size, intensity]);
   return <div className="wviz" style={{ height }}><canvas ref={ref} /></div>;
+}
+
+
+/* ───────────── 3D-шар «Моей волны» (WebGL) ─────────────
+   Капля жидкого стекла: поверхность деформирует 3D-шум, она медленно вращается и плывёт,
+   переливается цветами обложки (иридесценция + френель), блики и мягкое свечение.
+   Под музыку капля «дышит» и сильнее волнуется. */
+const ORB_VS = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+const ORB_FS = `
+precision highp float;
+uniform vec2 uRes; uniform float uTime; uniform float uEn; uniform vec4 uLv;
+uniform vec3 uC1; uniform vec3 uC2; uniform vec3 uC3; uniform float uScale;
+vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
+vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;}
+vec4 permute(vec4 x){return mod289(((x*34.)+1.)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C=vec2(1./6.,1./3.); const vec4 D=vec4(0.,.5,1.,2.);
+  vec3 i=floor(v+dot(v,C.yyy)); vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz); vec3 l=1.-g; vec3 i1=min(g.xyz,l.zxy); vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx; vec3 x2=x0-i2+C.yyy; vec3 x3=x0-D.yyy;
+  i=mod289(i);
+  vec4 p=permute(permute(permute(i.z+vec4(0.,i1.z,i2.z,1.))+i.y+vec4(0.,i1.y,i2.y,1.))+i.x+vec4(0.,i1.x,i2.x,1.));
+  float n_=.142857142857; vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.*floor(p*ns.z*ns.z); vec4 x_=floor(j*ns.z); vec4 y_=floor(j-7.*x_);
+  vec4 x=x_*ns.x+ns.yyyy; vec4 y=y_*ns.x+ns.yyyy; vec4 h=1.-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy); vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.+1.; vec4 s1=floor(b1)*2.+1.; vec4 sh=-step(h,vec4(0.));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy; vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x); vec3 p1=vec3(a0.zw,h.y); vec3 p2=vec3(a1.xy,h.z); vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+  vec4 m=max(.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.); m=m*m;
+  return 42.*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+mat2 rot(float a){float c=cos(a),s=sin(a);return mat2(c,-s,s,c);}
+float map(vec3 p){
+  vec3 q=p; q.xz=rot(uTime*.17)*q.xz; q.xy=rot(uTime*.11)*q.xy;
+  float amp=.085+uEn*.075;
+  float n=snoise(q*.78+vec3(0.,uTime*.2,uTime*.14))*amp;
+  n+=snoise(q*1.55-vec3(uTime*.24,0.,uTime*.17))*amp*(.28+uLv.y*.25);
+  float r=.92+.02*sin(uTime*1.2)+uEn*.05;
+  return (length(p)-r-n)*.62;
+}
+vec3 nrm(vec3 p){vec2 e=vec2(.0025,0.);return normalize(vec3(map(p+e.xyy)-map(p-e.xyy),map(p+e.yxy)-map(p-e.yxy),map(p+e.yyx)-map(p-e.yyx)));}
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*uRes)/uRes.y/uScale;
+  uv.y-=sin(uTime*.7)*.035; uv.x-=sin(uTime*.45)*.02;
+  vec3 ro=vec3(0.,0.,4.6); vec3 rd=normalize(vec3(uv,-1.6));
+  // ограничивающая сфера: лучи мимо капли не считаем
+  float b=dot(ro,rd); float c=dot(ro,ro)-1.62*1.62; float disc=b*b-c;
+  vec3 col=vec3(0.); float alpha=0.;
+  float rr=length(uv);
+  float halo=exp(-pow(max(rr-.3,0.)*4.2,1.6))*(.32+uEn*.55);
+  if(disc>0.){
+    float t=max(-b-sqrt(disc),0.); float dmin=9.; float tmin=t; bool hit=false;
+    for(int i=0;i<64;i++){
+      vec3 p=ro+rd*t; float d=map(p);
+      if(d<dmin){dmin=d;tmin=t;}
+      if(d<.001){hit=true;break;}
+      t+=d; if(t>8.)break;
+    }
+    float cov=hit?1.:1.-smoothstep(0.,.012,dmin);
+    if(cov>0.){
+      vec3 p=ro+rd*(hit?t:tmin); vec3 n=nrm(p); vec3 v=-rd;
+      float fres=pow(1.-max(dot(n,v),0.),2.6);
+      vec3 L=normalize(vec3(-.55,.75,.6)); vec3 L2=normalize(vec3(.7,-.3,.5));
+      float dif=max(dot(n,L),0.); float dif2=max(dot(n,L2),0.);
+      float spec=pow(max(dot(reflect(-L,n),v),0.),48.); float spec2=pow(max(dot(reflect(-L2,n),v),0.),22.);
+      float band=.5+.5*sin(dot(n,vec3(1.4,2.,.9))*1.6+uTime*.45+snoise(n*1.1+uTime*.08)*1.1);
+      vec3 base=mix(uC1,uC2,band);
+      base=mix(base,uC3,smoothstep(.15,.95,fres));
+      vec3 c2=base*(.32+.62*dif+.25*dif2);
+      c2+=uC2*.22*(.5+.5*n.y);
+      c2+=spec*vec3(1.)*.95+spec2*uC3*.45;
+      c2+=fres*uC3*.85+pow(fres,5.)*vec3(1.)*.35;
+      c2=pow(c2,vec3(.92));
+      col=c2*cov; alpha=cov;
+    }
+  }
+  col+=uC1*halo*(1.-alpha)*.9; alpha=max(alpha,halo*.75*(1.-alpha)+alpha);
+  gl_FragColor=vec4(col,alpha);
+}`;
+const hsl2rgb = (h, s, l) => { s /= 100; l /= 100; const k = (n) => (n + h / 30) % 12; const a = s * Math.min(l, 1 - l); const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))); return [f(0), f(8), f(4)]; };
+function WaveViz(props) {
+  const { pal, playing, height = 420, size = .62 } = props;
+  const ref = useRef(null);
+  const [gl2d, setGl2d] = useState(false);
+  const palRef = useRef(pal); palRef.current = pal;
+  const playRef = useRef(playing); playRef.current = playing;
+  useEffect(() => {
+    const c = ref.current;
+    const gl = c.getContext('webgl', { premultipliedAlpha: true, alpha: true, antialias: false });
+    if (!gl) { setGl2d(true); return; }
+    const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+    let prog;
+    try { prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, ORB_VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, ORB_FS)); gl.linkProgram(prog); if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog)); }
+    catch (e) { api?.send?.('log', 'orb shader failed', e.message); setGl2d(true); return; }
+    gl.useProgram(prog);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const U = Object.fromEntries(['uRes', 'uTime', 'uEn', 'uLv', 'uC1', 'uC2', 'uC3', 'uScale'].map((n) => [n, gl.getUniformLocation(prog, n)]));
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    let raf, t = Math.random() * 100, last = performance.now(), lv = [0, 0, 0, 0, 0], en = 0, visible = true;
+    let col = null;
+    const fit = () => { const r = c.getBoundingClientRect(); const dpr = Math.min(devicePixelRatio || 1, 1.5); c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr); gl.viewport(0, 0, c.width, c.height); };
+    fit(); const ro = new ResizeObserver(fit); ro.observe(c);
+    const io = new IntersectionObserver(([e]) => (visible = e.isIntersecting)); io.observe(c);
+    const loop = (now) => {
+      raf = requestAnimationFrame(loop);
+      if (!visible || document.hidden) { last = now; return; }
+      const dt = Math.min(.05, (now - last) / 1000); last = now;
+      const target = playRef.current ? levels.get() : [0, 0, 0, 0, 0];
+      lv = lv.map((v, i) => v + ((target[i] || 0) - v) * Math.min(1, dt * 7));
+      const e = (lv[0] * 1.5 + lv[1] * 1.1 + lv[2] * .8 + lv[3] * .4) / 3.8;
+      en += (e - en) * Math.min(1, dt * 9);
+      t += dt * (playRef.current ? .75 + en * 1.6 : .35);
+      // цвета обложки, сдвинутые в «жидкое стекло»
+      const { h = 220, ts = 45 } = palRef.current || {};
+      const S = clamp(ts * 1.5 + 10, 45, 88);
+      const want = [hsl2rgb(h, S, 55), hsl2rgb((h + 50) % 360, S, 62), hsl2rgb((h + 320) % 360, clamp(S - 10, 40, 80), 76)];
+      col = col ? col.map((cc, i) => cc.map((v, k) => v + (want[i][k] - v) * Math.min(1, dt * 2))) : want;
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform2f(U.uRes, c.width, c.height); gl.uniform1f(U.uTime, t); gl.uniform1f(U.uEn, en);
+      gl.uniform4f(U.uLv, lv[0], lv[1], lv[2], lv[3]); gl.uniform1f(U.uScale, size / .62);
+      gl.uniform3fv(U.uC1, col[0]); gl.uniform3fv(U.uC2, col[1]); gl.uniform3fv(U.uC3, col[2]);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); gl.getExtension('WEBGL_lose_context')?.loseContext(); };
+  }, [size]);
+  if (gl2d) return <WaveViz2D {...props} />;
+  return <div className="wviz orb3d" style={{ height }}><canvas ref={ref} /></div>;
 }
 
 const CHARACTERS = [['любимое', 'Любимое', 'Похожее на то, что ты слушаешь'], ['незнакомое', 'Незнакомое', 'Новые артисты'], ['популярное', 'Популярное', 'Чарты и хиты']];
@@ -1253,7 +1387,7 @@ function IslandApp() {
   const cmd = (c, a) => api.send('island:cmd', c, a);
   return (
     <div className="isl-root">
-      <div ref={pill} className="island" style={{ width: W, height: H, borderRadius: R, '--ah': s.pal?.h ?? 30, '--as': s.pal?.s ?? 20 }}>
+      <div ref={pill} className="island" onContextMenu={(e) => { e.preventDefault(); cmd('hide'); }} style={{ width: W, height: H, borderRadius: R, '--ah': s.pal?.h ?? 30, '--as': s.pal?.s ?? 20 }}>
         <div className="isl-layer isl-idle" style={layer(!open)}>
           {tr ? <img src={tr.cover} className={s.playing ? '' : 'off'} alt="" /> : <span style={{ width: 8 }} />}
           {s.loading ? <span className="spin" style={{ width: 11, height: 11, color: '#5F5F66' }} /> : <span className="mono" style={{ fontSize: 10.5, color: '#5F5F66' }}>{tr ? fmt(t) : 'MudPlayer'}</span>}
@@ -1264,7 +1398,7 @@ function IslandApp() {
             <img src={tr.cover} alt="" onClick={() => cmd('focus')} />
             <div style={{ minWidth: 0, flex: 1 }}><div className="t">{tr.title}</div><div className="a">{tr.artist}</div></div>
             <Eq n={5} h={16} />
-            <button className="isl-x" title="Скрыть островок" onClick={() => cmd('hide')}>{I.close}</button>
+            <button className="isl-x" title="Скрыть островок" onMouseDown={(e) => { e.stopPropagation(); cmd('hide'); }}>{I.close}</button>
           </div>
           <div className="isl-lyric"><div key={s.line}>{s.line && s.line !== '♪' ? s.line : '♪'}</div></div>
           <div className="isl-prog mono"><span>{fmt(t)}</span><Seek value={t} max={s.dur} onSeek={(v) => cmd('seek', v)} thin /><span>-{fmt((s.dur || 0) - t)}</span></div>

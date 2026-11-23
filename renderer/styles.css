@@ -326,3 +326,5 @@ kbd{font-family:'JetBrains Mono',monospace;font-size:10px;border:1px solid var(-
 .tapbtn:active{transform:scale(.96)}.tapbtn:disabled{opacity:.4}
 .isl-x{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;color:#5F5F66;flex:none}
 .isl-x:hover{color:#EDEDEF;background:rgba(255,255,255,.08)}
+
+.wviz.orb3d{-webkit-mask-image:none;mask-image:none}

@@ -264,7 +264,7 @@ async function wave({ seeds = [], genres = [], sources, mood = '', character = '
   }
   // 3) популярное: чарты
   if (pop || (!seeds.length && !genres.length)) {
-    if (sources.sc) jobs.push(settle('charts', sc.charts('trending')), settle('charts top', sc.charts('top')));
+    if (sources.sc) jobs.push(settle('charts', sc.charts('trending')));
     if (sources.yt) jobs.push(settle('hits', ytmSearch(lang === 'иностранный' ? 'top hits 2026' : 'хиты 2026', 20)));
   }
   const lists = (await Promise.all(jobs)).map((l) => l.sort(() => Math.random() - 0.5));
@@ -804,13 +804,14 @@ function createIsland() {
     width: ISL_W, height: ISL_H,
     x: Math.round(workArea.x + (workArea.width - ISL_W) / 2), y: workArea.y + 6,
     transparent: true, frame: false, resizable: false, movable: false, minimizable: false, maximizable: false,
-    hasShadow: false, skipTaskbar: true, focusable: false, alwaysOnTop: true, show: false,
+    hasShadow: false, skipTaskbar: true, focusable: true, alwaysOnTop: true, show: false,
     backgroundColor: '#00000000', title: 'MudPlayer Island',
     webPreferences: { preload: PRELOAD, contextIsolation: true, backgroundThrottling: false },
   });
   island.setAlwaysOnTop(true, 'screen-saver');
   island.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   island.setIgnoreMouseEvents(true, { forward: true });
+  island.on('blur', () => island.setAlwaysOnTop(true, 'screen-saver'));
   island.loadFile(INDEX, { hash: 'island' });
   island.once('ready-to-show', () => { islandReady = true; syncIsland(); });
   island.webContents.on('console-message', (_e, level, msg) => { if (level >= 2) log('[island]', msg); });
@@ -882,6 +883,7 @@ ipcMain.on('island:levels', (_e, l) => island && !island.isDestroyed() && island
 ipcMain.on('island:visible', (_e, v) => { islandMode = v === true ? 'background' : v === false ? 'off' : v; log('island mode', islandMode); syncIsland(); });
 // island → main window
 ipcMain.on('island:cmd', (_e, c, arg) => {
+  log('island cmd', c);
   if (c === 'hide') { islandMode = 'off'; syncIsland(); send('island-mode', 'off'); return; }
   send('cmd', c, arg); if (c === 'focus' && main) { main.show(); main.restore(); main.focus(); }
 });
