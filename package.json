@@ -1,0 +1,71 @@
+{
+  "name": "mudplayer",
+  "productName": "MudPlayer",
+  "version": "0.6.0",
+  "description": "Desktop music player: YouTube Music + SoundCloud + Audius, synced lyrics, Dynamic Island",
+  "main": "main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64 --publish never"
+  },
+  "dependencies": {
+    "youtubei.js": "latest",
+    "electron-updater": "latest"
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  },
+  "author": "muderSSS",
+  "build": {
+    "appId": "com.muderSSS.mudplayer",
+    "productName": "MudPlayer",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main/**",
+      "renderer/index.html",
+      "renderer/styles.css",
+      "renderer/renderer.js",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "MudPlayer",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "sashap228",
+        "repo": "mudplayer",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sashap228/mudplayer.git"
+  }
+}
