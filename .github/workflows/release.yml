@@ -29,6 +29,13 @@ jobs:
           V=$(node -p "require('./package.json').version")
           echo "version=$V" >> $GITHUB_OUTPUT
           if gh release view "v$V" >/dev/null 2>&1; then echo "exists=1" >> $GITHUB_OUTPUT; echo "v$V уже выпущена"; else echo "exists=0" >> $GITHUB_OUTPUT; fi
+      - name: Tag the version
+        if: steps.check.outputs.exists == '0'
+        shell: bash
+        run: |
+          V=${{ steps.check.outputs.version }}
+          git config user.name "github-actions"; git config user.email "github-actions@users.noreply.github.com"
+          git tag -f "v$V" && git push -f origin "v$V"
       - if: steps.check.outputs.exists == '0'
         run: npm install --no-audit --no-fund
       - if: steps.check.outputs.exists == '0'
